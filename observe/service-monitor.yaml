@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    instance: primary
+  name: cost-tool-monitor
+  namespace: cost-tooling
+spec:
+  endpoints:
+  - honorLabels: true
+    interval: 60s
+    path: /metrics
+    port: tcp-model
+  namespaceSelector:
+    matchNames:
+    - cost-tooling
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cost-analyzer

@@ -1,0 +1,104 @@
+imageVersion: $KUBECOST_VERSION
+kubecostFrontend:
+  ipv6:
+    enabled: false
+
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::$AWS_ACCOUNT_ID:role/$KUBECOST_IAM_ROLE
+
+kubecostProductConfigs:
+  clusterName: $CLUSTER_NAME
+  athenaProjectID: "$AWS_ACCOUNT_ID"
+  athenaBucketName: "s3://${ATHENA_BUCKET_NAME}/"
+  athenaRegion: $CLUSTER_REGION
+  athenaDatabase: $ATHENA_DATABASE_NAME
+  athenaTable: $ATHENA_TABLE_NAME
+  athenaWorkgroup: $ATHENA_WORKGROUP
+
+oidc:
+  enabled: false
+  #secretName: "kubecost-oidc-secret"
+  #authURL: "https://$IDP_TENANT/authorize?response_type=code&scope=openid email&client_id=$client_id&redirect_uri=https://$KUBECOST_URL/model/oidc/authorize&audience=https://$KUBECOST_URL"
+  #loginRedirectURL: "https://$KUBECOST_URL/model/oidc/authorize"
+  #discoveryURL: "https://$IDP_TENANT/.well-known/openid-configuration"
+
+# Prometheus disables KSM as this is run as part of Istio
+prometheus:
+  server:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1001
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+    global:
+      external_labels:
+        cluster_id: $CLUSTER_NAME
+  nodeExporter:
+    enabled: true
+  kubeStateMetrics:
+    enabled: false
+    disabled: true
+  serviceAccounts:
+    nodeExporter:
+      create: true
+  configmapReload:
+    prometheus:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 50Mi
+
+grafana:
+  rbac:
+    pspEnabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "20Mi"
+  sidecar:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "20Mi"
+
+networkCosts:
+  enabled: true
+  prometheusScrape: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "20Mi"
+  config:
+    services:
+      amazon-web-services: "true"
+    destinations:
+      in-zone:
+        # Loopback
+        - "127.0.0.1"
+        # IPv4 Link Local Address Space
+        - "169.254.0.0/16"
+      direct-classification:
+      - region: "$AWS_REGION"
+        zone: "${AWS_REGION}a"
+        ips:
+          - "$VPC_PRIVATE_SUBNETS[1]"
+          - "$VPC_PUBLIC_SUBNETS[1]"
+          - "$VPC_INFRA_SUBNETS[1]"
+          - "$VPC_DATABASE_SUBNETS[1]"
+      - region: "$AWS_REGION"
+        zone: "${AWS_REGION}b"
+        ips:
+          - "$VPC_PRIVATE_SUBNETS[2]"
+          - "$VPC_PUBLIC_SUBNETS[2]"
+          - "$VPC_INFRA_SUBNETS[2]"
+          - "$VPC_DATABASE_SUBNETS[2]"
+      - region: "$AWS_REGION"
+        zone: "${AWS_REGION}c"
+        ips:
+          - "$VPC_PRIVATE_SUBNETS[3]"
+          - "$VPC_PUBLIC_SUBNETS[3]"
+          - "$VPC_INFRA_SUBNETS[3]"
+          - "$VPC_DATABASE_SUBNETS[3]"

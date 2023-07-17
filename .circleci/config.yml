@@ -1,0 +1,189 @@
+---
+version: 2.1
+
+orbs:
+  terraform: twdps/terraform@0.6.0
+  kube: twdps/kube-ops@0.3.0
+  op: twdps/onepassword@1.0.0
+  do: twdps/pipeline-events@0.1.0
+
+# ==== global pipeline parameters
+
+parameters:
+  context:
+    description: circleci context for all jobs
+    type: string
+    default: twdps-core-labs-team
+  terraform-version:
+    description: terraform version for all jobs
+    type: string
+    default: "1.2.2"
+  executor-image:
+    description: image to use for terraform runs
+    type: string
+    default: twdps/circleci-kube-ops:alpine-0.8.0
+
+# ==== triggers
+
+on-push-main: &on-push-main
+  branches:
+    only: /main/
+  tags:
+    ignore: /.*/
+
+on-tag-main: &on-tag-main
+  branches:
+    ignore: /.*/
+  tags:
+    only: /.*/
+
+commands:
+
+  set-environment:
+    description: generate environment credentials and configuration from templates
+    parameters:
+      cluster:
+        description: cluster name to use for configuration
+        type: string
+      source-env:
+        description: .env file to source into BASH_ENV
+        type: string
+    steps:
+      - op/env:
+          env-file: << parameters.source-env >>
+      - run:
+          name: set ~/.terraformrc
+          command: op inject -i tpl/terraformrc.tpl -o ~/.terraformrc
+      - run:
+          name: set << parameters.cluster >> environment variables
+          command: |
+            op inject -i environments/<< parameters.cluster >>.auto.tfvars.json.tpl -o << parameters.cluster >>.auto.tfvars.json
+
+  set-kubeconfig:
+    parameters:
+      cluster:
+        description: cluster name to use for configuration
+        type: string
+    steps:
+      - run:
+          name: setup kubeconfig
+          command: |
+            mkdir -p ~/.kube
+            ENV=<< parameters.cluster >> op inject -i tpl/kubeconfig.tpl -o ~/.kube/config
+
+
+jobs:
+
+  deploy-kubecost:
+    parameters:
+      cluster:
+        description: cluster being validated
+        type: string
+      shell:
+        description: shell options
+        type: string
+        default: /bin/bash -eo pipefail
+      source-env:
+        description: .env file to source into BASH_ENV
+        type: string
+    docker:
+      - image: << pipeline.parameters.executor-image >>
+    shell: << parameters.shell >>
+    steps:
+      - checkout
+      - setup_remote_docker
+      - set-environment:
+          cluster: << parameters.cluster >>
+          source-env: << parameters.source-env >>
+      - set-kubeconfig:
+          cluster: << parameters.cluster >>
+      - run:
+          name: deploy kubecost to kubernetes
+          command: bash scripts/deploy_kubecost.sh << parameters.cluster >>
+
+  # update-grafana-dashboards: TODO
+
+
+workflows:
+  version: 2
+
+  deploy CUR to sandbox-us-east-2:
+    jobs:
+      - terraform/plan:
+          name: sandbox-us-east-2 change plan
+          context: << pipeline.parameters.context >>
+          shell: op run --env-file op.sandbox.env -- /bin/bash -eo pipefail
+          workspace: sandbox-us-east-2
+          terraform-version: << pipeline.parameters.terraform-version >>
+          before-terraform:
+            - set-environment:
+                cluster: sandbox-us-east-2
+                source-env: op.sandbox.env
+          filters: *on-push-main
+
+      - approve sandbox-us-east-2 changes:
+          type: approval
+          requires:
+            - sandbox-us-east-2 change plan
+          filters: *on-push-main
+
+      - terraform/apply:
+          name: apply sandbox-us-east-2 changes
+          context: << pipeline.parameters.context >>
+          shell: op run --env-file op.sandbox.env -- /bin/bash -eo pipefail
+          workspace: sandbox-us-east-2
+          terraform-version: << pipeline.parameters.terraform-version >>
+          before-terraform:
+            - set-environment:
+                cluster: sandbox-us-east-2
+                source-env: op.sandbox.env
+          requires:
+            - approve sandbox-us-east-2 changes
+          filters: *on-push-main
+
+  # deploy kubecost to sandbox-us-east-2:
+  #   jobs:
+      # - deploy-kubecost-services:
+      #     name: deploy sandbox-us-east-2 kubecost changes
+
+  release CUR to prod-us-east-1:
+    jobs:
+      - terraform/plan:
+          name: prod-us-east-1 change plan
+          context: << pipeline.parameters.context >>
+          shell: op run --env-file op.prod.env -- /bin/bash -eo pipefail
+          workspace: prod-us-east-1
+          terraform-version: << pipeline.parameters.terraform-version >>
+          before-terraform:
+            - set-environment:
+                cluster: prod-us-east-1
+                source-env: op.prod.env
+          filters: *on-tag-main
+
+      - approve prod-us-east-1 changes:
+          type: approval
+          requires:
+            - prod-us-east-1 change plan
+          filters: *on-tag-main
+
+      - terraform/apply:
+          name: apply prod-us-east-1 changes
+          context: << pipeline.parameters.context >>
+          shell: op run --env-file op.prod.env -- /bin/bash -eo pipefail
+          workspace: prod-us-east-1
+          terraform-version: << pipeline.parameters.terraform-version >>
+          before-terraform:
+            - set-environment:
+                cluster: prod-us-east-1
+                source-env: op.prod.env
+          # after-terraform:
+          #   - do/circle-deploy
+            # - do/slack-webhook:
+            #     message: lab-platform-eks-base prod-us-east-1 release
+            #     webhook-url: $LAB_EVENTS_CHANNEL_WEBHOOK
+          requires:
+            - approve prod-us-east-1 changes
+          filters: *on-tag-main
+
+  # deploy kubecost to prod-us-east-1:
+  #   jobs:
